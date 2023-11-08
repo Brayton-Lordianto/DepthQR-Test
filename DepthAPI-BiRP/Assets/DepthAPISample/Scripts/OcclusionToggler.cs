@@ -43,6 +43,8 @@ namespace DepthAPISample
             if (OVRInput.GetDown(OVRInput.RawButton.A))
             {
                 SwitchToNextOcclusionType();
+
+
             }
         }
 
@@ -54,6 +56,10 @@ namespace DepthAPISample
             _occlusionController.EnableOcclusionType(newType);
 
             _currentOcclusionsModeText.text = $"Occlusion mode: \n{newType.ToString()}";
+
+            Debug.Log("test debug");
+            UnityEngine.Debug.Log("test unity debug");
+            print("test print");
         }
     }
 }

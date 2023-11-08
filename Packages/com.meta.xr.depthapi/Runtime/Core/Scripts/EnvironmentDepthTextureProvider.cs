@@ -43,6 +43,9 @@ namespace Meta.XR.Depth
 
         private XRDisplaySubsystem _xrDisplay;
 
+        //[SerializeField]
+        //private TextMeshProUGUI _currentOcclusionsModeText;
+
         private void Start()
         {
             _xrDisplay = OVRManager.GetCurrentDisplaySubsystem();
