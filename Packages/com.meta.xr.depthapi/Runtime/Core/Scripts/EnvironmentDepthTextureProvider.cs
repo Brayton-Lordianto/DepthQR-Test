@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
@@ -18,9 +18,11 @@
  * limitations under the License.
  */
 
+using System.Collections;
 using Unity.XR.Oculus;
 using UnityEngine;
 using UnityEngine.XR;
+using System.IO;
 
 namespace Meta.XR.Depth
 {
@@ -32,23 +34,38 @@ namespace Meta.XR.Depth
     {
         public static readonly string DepthTexturePropertyName = "_EnvironmentDepthTexture";
         public static readonly string ReprojectionMatricesPropertyName = "_EnvironmentDepthReprojectionMatrices";
+        public static readonly string Reprojection3DOFMatricesPropertyName = "_EnvironmentDepth3DOFReprojectionMatrices";
         public static readonly string ZBufferParamsPropertyName = "_EnvironmentDepthZBufferParams";
 
         public static readonly int DepthTextureID = Shader.PropertyToID(DepthTexturePropertyName);
         public static readonly int ReprojectionMatricesID = Shader.PropertyToID(ReprojectionMatricesPropertyName);
+        public static readonly int Reprojection3DOFMatricesID = Shader.PropertyToID(Reprojection3DOFMatricesPropertyName);
         public static readonly int ZBufferParamsID = Shader.PropertyToID(ZBufferParamsPropertyName);
+
+        // Required for per object occlusion shaders
+        public bool Enable6DoFCalculations = true;
+
+        // Required for screenspace shaders
+        public bool Enable3DoFCalculations = false;
+
+        public Transform CustomTrackingSpaceTransform = null;
 
         private bool _shouldEnableDepthRendering;
         private bool _depthRenderingEnabled;
 
         private XRDisplaySubsystem _xrDisplay;
 
-        //[SerializeField]
-        //private TextMeshProUGUI _currentOcclusionsModeText;
+        private readonly Matrix4x4[] _reprojectionMatrices =
+            new Matrix4x4[2] { Matrix4x4.identity, Matrix4x4.identity };
 
         private void Start()
         {
             _xrDisplay = OVRManager.GetCurrentDisplaySubsystem();
+
+            if (CustomTrackingSpaceTransform == null)
+            {
+                CustomTrackingSpaceTransform = FindObjectOfType<OVRCameraRig>()?.trackingSpace;
+            }
         }
 
         public void EnableEnvironmentDepth()
@@ -82,18 +99,27 @@ namespace Meta.XR.Depth
             }
 
             uint id = 0;
-            if (Utils.GetEnvironmentDepthTextureId(ref id))
+            if (Utils.GetEnvironmentDepthTextureId(ref id) && _xrDisplay != null && _xrDisplay.running)
             {
                 var rt = _xrDisplay.GetRenderTexture(id);
                 Shader.SetGlobalTexture(DepthTextureID, rt);
+
+                if (OVRInput.GetDown(OVRInput.RawButton.Start))
+                {
+                    Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
+                    RenderTexture.active = rt;
+                    tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                    tex.Apply();
+                    /* For Brayton: Please send variable bytes to the network. */
+                    byte[] bytes = tex.EncodeToPNG();
+                    //File.WriteAllBytes(Application.persistentDataPath + "./Data/Depth" + ".png", bytes);
+                }
             }
             else
             {
                 Debug.LogWarning("DepthAPI: no environment texture");
                 return;
             }
-
-            Matrix4x4[] reprojectionMatrices = new Matrix4x4[2] { Matrix4x4.identity, Matrix4x4.identity };
 
             OVRPlugin.Frustumf2 leftEyeFrustrum;
             OVRPlugin.Frustumf2 rightEyeFrustrum;
@@ -111,21 +137,41 @@ namespace Meta.XR.Depth
 #endif
 
             var leftEyeData = Utils.GetEnvironmentDepthFrameDesc(0);
-            reprojectionMatrices[0] = EnvironmentDepthUtils.CalculateReprojection(leftEyeData, leftEyeFrustrum.Fov);
-
             var rightEyeData = Utils.GetEnvironmentDepthFrameDesc(1);
-            reprojectionMatrices[1] = EnvironmentDepthUtils.CalculateReprojection(rightEyeData, rightEyeFrustrum.Fov);
 
             // Assume NearZ and FarZ are the same for left and right eyes
             float depthNearZ = leftEyeData.nearZ;
             float depthFarZ = leftEyeData.farZ;
 
+            // Calculate Environment Depth Camera parameters
             Vector4 depthZBufferParams = EnvironmentDepthUtils.ComputeNdcToLinearDepthParameters(depthNearZ, depthFarZ);
-
-            Shader.SetGlobalMatrixArray(ReprojectionMatricesID,
-                reprojectionMatrices);
             Shader.SetGlobalVector(ZBufferParamsID,
                 depthZBufferParams);
+
+            if (Enable6DoFCalculations)
+            {
+                // Calculate 6DOF reprojection matrices
+                _reprojectionMatrices[0] = EnvironmentDepthUtils.CalculateReprojection(leftEyeData, leftEyeFrustrum.Fov);
+                _reprojectionMatrices[1] = EnvironmentDepthUtils.CalculateReprojection(rightEyeData, rightEyeFrustrum.Fov);
+
+                if (CustomTrackingSpaceTransform != null && !CustomTrackingSpaceTransform.worldToLocalMatrix.isIdentity)
+                {
+                    var worldToLocalMatrix = CustomTrackingSpaceTransform.worldToLocalMatrix;
+                    _reprojectionMatrices[0] *= worldToLocalMatrix;
+                    _reprojectionMatrices[1] *= worldToLocalMatrix;
+                }
+
+                Shader.SetGlobalMatrixArray(ReprojectionMatricesID, _reprojectionMatrices);
+            }
+
+            if (Enable3DoFCalculations)
+            {
+                // Calculate 3DOF reprojection matrices
+                _reprojectionMatrices[0] = EnvironmentDepthUtils.Calculate3DOFReprojection(leftEyeData, leftEyeFrustrum.Fov);
+                _reprojectionMatrices[1] = EnvironmentDepthUtils.Calculate3DOFReprojection(rightEyeData, rightEyeFrustrum.Fov);
+
+                Shader.SetGlobalMatrixArray(Reprojection3DOFMatricesID, _reprojectionMatrices);
+            }
         }
     }
 }
