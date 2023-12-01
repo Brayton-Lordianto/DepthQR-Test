@@ -25,6 +25,8 @@ namespace DepthAPISample
 {
     public class SceneSwitcher : MonoBehaviour
     {
+        public GameObject debug;
+
         private void Update()
         {
             if (OVRInput.GetDown(OVRInput.RawButton.Start))
